@@ -1,9 +1,7 @@
 # %%
 from typing import Any
+from omegaconf import OmegaConf
 import torch.cuda.nvtx as nvtx
-from cs336_basics.config import Config
-
-config = Config(vocab_size=10000)
 
 def insert_nvtx(moduel: Any, name: str):
   import functools
@@ -20,14 +18,128 @@ insert_nvtx(cs336_basics.modules, "_cross_entory")
 insert_nvtx(cs336_basics.modules, "_softmax")
 
 # %%
-from cs336_basics.modules import _cross_entory
+from cs336_basics.config import LLMConfig
+from dataclasses import dataclass, field
+from hydra.core.config_store import ConfigStore
+
+@dataclass
+class TimingConfig:
+  backward: bool = True
+  optim_step: bool = False
+  timeit: bool = True
+  warmup_steps: int = 10
+  count_steps: int = 20
+
+@dataclass
+class Config:
+  mode: str # "benchmark" | "profile"
+  llm: LLMConfig
+  timing: TimingConfig = field(default_factory=TimingConfig)
+
+cs = ConfigStore.instance()
+cs.store(group="timing", name="forward", node=TimingConfig(backward=False, optim_step=False))
+cs.store(group="timing", name="backward", node=TimingConfig(backward=True, optim_step=False))
+cs.store(group="timing", name="full", node=TimingConfig(backward=True, optim_step=True))
+
+cs.store(group="llm", name="small", node=LLMConfig(
+  vocab_size=10000,
+  batch_size=4,
+  context_length=256,
+  d_model=768,
+  d_ff=3072,
+  num_layers=12,
+  num_heads=12,
+))
+cs.store(group="llm", name="medium", node=LLMConfig(
+  vocab_size=10000,
+  batch_size=4,
+  context_length=256,
+  d_model=1024,
+  d_ff=4096,
+  num_layers=24,
+  num_heads=16,
+))
+cs.store(group="llm", name="large", node=LLMConfig(
+  vocab_size=10000,
+  batch_size=4,
+  context_length=256,
+  d_model=1280,
+  d_ff=5120,
+  num_layers=36,
+  num_heads=20,
+))
+cs.store(group="llm", name="xl", node=LLMConfig(
+  vocab_size=10000,
+  batch_size=4,
+  context_length=256,
+  d_model=1600,
+  d_ff=6400,
+  num_layers=48,
+  num_heads=25,
+))
+cs.store(group="llm", name="2.7B", node=LLMConfig(
+  vocab_size=10000,
+  batch_size=4,
+  context_length=256,
+  d_model=2560,
+  d_ff=10240,
+  num_layers=32,
+  num_heads=32,
+))
+
+default_args = ["+llm=small", "+timing=full", "+mode=null"]
+def get_config(args: list[str] | None = None) -> Config:
+  import hydra
+  from typing import cast
+  if args is None:
+    args = [*default_args]
+  else:
+    args = [*default_args, *args]
+
+  with hydra.initialize(config_path=None, version_base='1.3'):
+    cfg = hydra.compose(
+      config_name=None,
+      overrides=args
+    )
+  return cast(Config, cfg)
+
+def get_config_multi(args: list[str] | None = None) -> list[Config]:
+  import hydra
+  from hydra.core.global_hydra import GlobalHydra
+  from hydra.core.override_parser.overrides_parser import OverridesParser
+  from hydra._internal.core_plugins.basic_sweeper import BasicSweeper
+  from typing import cast
+  if args is None:
+    args = [*default_args]
+  else:
+    args = [*default_args, *args]
+  with hydra.initialize(config_path=None, version_base='1.3'):
+    gh = GlobalHydra.instance()
+    assert gh.hydra is not None
+    parser = OverridesParser.create(config_loader=gh.hydra.config_loader)
+    overrides = parser.parse_overrides(args)
+    split_overrides = BasicSweeper.split_arguments(overrides, None)[0]
+    configs = [
+      hydra.compose(
+        config_name=None,
+        overrides=o # type: ignore
+      ) for o in split_overrides
+    ]
+  return [cast(Config, cfg) for cfg in configs]
+
+# get_config()
+# get_config_multi(["+llm=small,large", "+timing=full", "llm.batch_size=16,32", "llm.context_length=128,256"])
+# %%
+from cs336_basics.modules import CrossEntropy
 from dataclasses import dataclass, field
 import timeit
 import numpy as np
 import torch
 from torch import Tensor
-x = (torch.randn((config.batch_size, config.context_length + 1), device="cuda") % 1 * config.vocab_size).abs().long()
-x, y = x[:, :-1], x[:, 1:]
+
+def sample_xy(config: LLMConfig) -> tuple[Tensor, Tensor]:
+  x = (torch.randn((config.batch_size, config.context_length + 1), device="cuda") % 1 * config.vocab_size).abs().long()
+  return x[:, :-1], x[:, 1:]
 
 @dataclass
 class Timing:
@@ -70,11 +182,12 @@ class Timing:
       print(f"Optim: {format_unit(optim_times.mean(), unit)} ± {format_unit(optim_times.std(), unit)}")
     print(f"Total: {format_unit(total_times.mean(), unit)} ± {format_unit(total_times.std(), unit)}")
 
+cross_entropy = CrossEntropy()
 def step(llm: torch.nn.Module, optim: torch.optim.Optimizer, x: Tensor, y: Tensor, backward: bool = True, optim_step: bool = True, timeit = False) -> tuple[Tensor, Timing | None]:
   timer = Timing() if timeit else None
   with nvtx.range("forward"):
     y_hat = llm(x) # type: Tensor
-    loss = _cross_entory(y_hat, y).mean()
+    loss = cross_entropy(y_hat, y).mean() # type: Tensor
   if timer is not None:
     torch.cuda.synchronize()
     timer.mark_forward_end()
@@ -87,9 +200,6 @@ def step(llm: torch.nn.Module, optim: torch.optim.Optimizer, x: Tensor, y: Tenso
     if timer is not None:
       torch.cuda.synchronize()
       timer.mark_backward_end()
-    # torch.cuda.synchronize()
-    # endtime = timer is not None.default_timer()
-    # print(f"Backward time: {endtime - starttime:.4f} seconds")
     if optim_step:
       with nvtx.range("optim.step"):
         optim.step()
@@ -106,18 +216,24 @@ def timeit_steps(llm: torch.nn.Module, optim: torch.optim.Optimizer, x: Tensor, 
   result = [step(llm, optim, x, y, backward=backward, optim_step=optim_step, timeit=True)[1] for _ in range(steps)]
   Timing.report([r for r in result if r is not None], unit="milliseconds")
 
-if False:
-  # %%
-  print("forward pass:")
-  llm, optim = config.create_llm(device="cuda")
-  timeit_steps(llm, optim, x, y, steps=10, backward=False)
-  timeit_steps(llm, optim, x, y, steps=20, backward=False)
+def get_args():
+  import sys
+  args = [i for i in sys.argv[1:] if not i.startswith("--")]
+  return args
+
+if __name__ == "__main__" and (cfg := get_config(get_args())) and cfg.mode == "benchmark":
+  config: LLMConfig = OmegaConf.to_object(cfg.llm) # type: ignore
+  x, y = sample_xy(config)
 
   # %%
-  print("backward pass:")
   llm, optim = config.create_llm(device="cuda")
-  timeit_steps(llm, optim, x, y, steps=10, backward=True, optim_step=False)
-  timeit_steps(llm, optim, x, y, steps=20, backward=True, optim_step=False)
+  for epoch in range(cfg.timing.warmup_steps):
+    step(llm, optim, x, y, backward=cfg.timing.backward, optim_step=cfg.timing.optim_step, timeit=False)
+  timeit_steps(llm, optim, x, y, steps=cfg.timing.count_steps, backward=cfg.timing.backward, optim_step=cfg.timing.optim_step)
+
+  # %%
+  import os
+  os._exit(0)
 
 # %%
 from einops import einsum
@@ -148,9 +264,14 @@ def _scaled_dot_product_attention(
 cs336_basics.modules._scaled_dot_product_attention = _scaled_dot_product_attention
 
 # %%
-if __file__ == "__main__":
+if __name__ == "__main__" and (cfg := get_config(get_args())) and cfg.mode == "profile":
+  cfg.mode = "profile"
+  config: LLMConfig = OmegaConf.to_object(cfg.llm) # type: ignore
+  x, y = sample_xy(config)
   llm, optim = config.create_llm(device="cuda")
-  for epoch in range(30):
-    step(llm, optim, x, y, backward=True, optim_step=True, timeit=True)
+  for epoch in range(cfg.timing.warmup_steps):
+    step(llm, optim, x, y, backward=True, optim_step=True)
+  for epoch in range(cfg.timing.count_steps):
+    step(llm, optim, x, y, backward=cfg.timing.backward, optim_step=cfg.timing.optim_step, timeit=cfg.timing.timeit)
 
 # %%
