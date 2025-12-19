@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "cs336-basics",
+    "cs336-basics2",
     "humanfriendly",
     "matplotlib",
     "numpy",
@@ -33,6 +34,7 @@ python-preference = "managed"
 
 [tool.uv.sources]
 cs336-basics = { path = "../assignment1-basics", editable = true }  # Change this path to your assignment1-basics repo you want to use your own implementation!
+cs336-basics2 = { path = "./cs336-basics2", editable = true }
 
 
 
