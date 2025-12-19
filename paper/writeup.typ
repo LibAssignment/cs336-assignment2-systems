@@ -16,3 +16,5 @@
   - warmup: 327 ms ± 7.34 ms per loop (mean ± std. dev. of 7 runs, 20 loops each)
 
 == Problem (nsys_profile)
++ find a bug that `torch.arange` does not set device, so it would alloc and sync to GPU, causing python code blocking and waiting for GPU to finish the alloc/sync operation.
++ there might be command queue in GPU, so launching kernel might be blocking on CPU if the queue is full.
