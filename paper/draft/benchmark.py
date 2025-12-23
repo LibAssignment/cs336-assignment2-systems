@@ -40,6 +40,7 @@ cs = ConfigStore.instance()
 cs.store(group="timing", name="forward", node=TimingConfig(backward=False, optim_step=False))
 cs.store(group="timing", name="backward", node=TimingConfig(backward=True, optim_step=False))
 cs.store(group="timing", name="full", node=TimingConfig(backward=True, optim_step=True))
+cs.store(name="timing_nowarm", node={'timing': dict(warmup_steps=0, count_steps=10)})
 
 cs.store(group="llm", name="small", node=LLMConfig(
   vocab_size=10000,
@@ -127,7 +128,7 @@ def get_config_multi(args: list[str] | None = None) -> list[Config]:
     ]
   return [cast(Config, cfg) for cfg in configs]
 
-# get_config()
+get_config(['+timing_nowarm']).timing
 # get_config_multi(["+llm=small,large", "+timing=full", "llm.batch_size=16,32", "llm.context_length=128,256"])
 # %%
 from cs336_basics.modules import CrossEntropy
@@ -175,12 +176,25 @@ class Timing:
       else:
         return f"{seconds:.6f} s"
 
-    print(f"Forward: {format_unit(forward_times.mean(), unit)} ± {format_unit(forward_times.std(), unit)}")
-    if len(backward_times) > 0:
-      print(f"Backward: {format_unit(backward_times.mean(), unit)} ± {format_unit(backward_times.std(), unit)}")
-    if len(optim_times) > 0:
-      print(f"Optim: {format_unit(optim_times.mean(), unit)} ± {format_unit(optim_times.std(), unit)}")
-    print(f"Total: {format_unit(total_times.mean(), unit)} ± {format_unit(total_times.std(), unit)}")
+    return {
+      'forward_mean': format_unit(forward_times.mean(), unit),
+      'forward_std': format_unit(forward_times.std(), unit),
+      'backward_mean': format_unit(backward_times.mean(), unit) if len(backward_times) > 0 else "",
+      'backward_std': format_unit(backward_times.std(), unit) if len(backward_times) > 0 else "",
+      'optim_mean': format_unit(optim_times.mean(), unit) if len(optim_times) > 0 else "",
+      'optim_std': format_unit(optim_times.std(), unit) if len(optim_times) > 0 else "",
+      'total_mean': format_unit(total_times.mean(), unit),
+      'total_std': format_unit(total_times.std(), unit),
+    }
+
+  @staticmethod
+  def print_report(report: dict, unit: str = "seconds"):
+    print(f"Forward: {report['forward_mean']} ± {report['forward_std']}")
+    if report['backward_mean']:
+      print(f"Backward: {report['backward_mean']} ± {report['backward_std']}")
+    if report['optim_mean']:
+      print(f"Optim: {report['optim_mean']} ± {report['optim_std']}")
+    print(f"Total: {report['total_mean']} ± {report['total_std']}")
 
 cross_entropy = CrossEntropy()
 def step(llm: torch.nn.Module, optim: torch.optim.Optimizer, x: Tensor, y: Tensor, backward: bool = True, optim_step: bool = True, timeit = False) -> tuple[Tensor, Timing | None]:
@@ -214,7 +228,7 @@ def step(llm: torch.nn.Module, optim: torch.optim.Optimizer, x: Tensor, y: Tenso
 # %%
 def timeit_steps(llm: torch.nn.Module, optim: torch.optim.Optimizer, x: Tensor, y: Tensor, steps: int = 10, backward: bool = True, optim_step: bool = True):
   result = [step(llm, optim, x, y, backward=backward, optim_step=optim_step, timeit=True)[1] for _ in range(steps)]
-  Timing.report([r for r in result if r is not None], unit="milliseconds")
+  return Timing.report([r for r in result if r is not None], unit="milliseconds")
 
 def get_args():
   import sys
@@ -229,7 +243,28 @@ if __name__ == "__main__" and (cfg := get_config(get_args())) and cfg.mode == "b
   llm, optim = config.create_llm(device="cuda")
   for epoch in range(cfg.timing.warmup_steps):
     step(llm, optim, x, y, backward=cfg.timing.backward, optim_step=cfg.timing.optim_step, timeit=False)
-  timeit_steps(llm, optim, x, y, steps=cfg.timing.count_steps, backward=cfg.timing.backward, optim_step=cfg.timing.optim_step)
+  report = timeit_steps(llm, optim, x, y, steps=cfg.timing.count_steps, backward=cfg.timing.backward, optim_step=cfg.timing.optim_step)
+  Timing.print_report(report)
+  # %%
+  import os
+  if not os.path.exists("benchmark_results.csv"):
+    with open("benchmark_results.csv", "w") as f:
+      f.write("d_model,num_layers,num_heads,batch_size,context_length,")
+      f.write("forward_mean(ms),forward_std(ms),")
+      f.write("backward_mean(ms),backward_std(ms),")
+      f.write("optim_mean(ms),optim_std(ms),")
+      f.write("total_mean(ms),total_std(ms)\n")
+  with open("benchmark_results.csv", "a") as f:
+    def get_value(s: str) -> str:
+      return str(float(s.split()[0])) if s else ''
+    try:
+      f.write(f"{config.d_model},{config.num_layers},{config.num_heads},{config.batch_size},{config.context_length},")
+      f.write(f"{get_value(report['forward_mean'])},{get_value(report['forward_std'])},")
+      f.write(f"{get_value(report['backward_mean'])},{get_value(report['backward_std'])},")
+      f.write(f"{get_value(report['optim_mean'])},{get_value(report['optim_std'])},")
+      f.write(f"{get_value(report['total_mean'])},{get_value(report['total_std'])}")
+    finally:
+      f.write("\n")
 
   # %%
   import os

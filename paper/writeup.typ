@@ -18,3 +18,4 @@
 == Problem (nsys_profile)
 + find a bug that `torch.arange` does not set device, so it would alloc and sync to GPU, causing python code blocking and waiting for GPU to finish the alloc/sync operation.
 + there might be command queue in GPU, so launching kernel might be blocking on CPU if the queue is full.
++ if CUDA HW doesn't appear in the profile, it might be `CuptiUseRawGpuTimestamps` issue, see https://forums.developer.nvidia.com/t/nsys-doesnt-show-cuda-kernel-and-memory-data/315536/8 for more information.
