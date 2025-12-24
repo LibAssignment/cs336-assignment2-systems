@@ -1,0 +1,29 @@
+diff --git a/tilelang/env.py b/tilelang/env.py
+index 47ed4c3..ffe024f 100644
+--- a/tilelang/env.py
++++ b/tilelang/env.py
+@@ -68,6 +68,23 @@ def _find_cuda_home() -> str:
+ 
+         else:
+             # Guess #3
++            target_candidates = [
++                #"nvidia/cu12/bin/nvcc",
++                "nvidia/cu13/bin/nvcc",
++            ]
++            if sys.platform == "win32":
++                target_candidates = [i + '.exe' for i in target_candidates]
++            for base in sys.path:
++                for candidate in target_candidates:
++                    nvcc_path = os.path.join(base, candidate)
++                    if os.path.exists(nvcc_path):
++                        cuda_home = os.path.dirname(os.path.dirname(nvcc_path))
++                        break
++                if cuda_home is not None:
++                    break
++
++        if cuda_home is None:
++            # Guess #4
+             if sys.platform == "win32":
+                 cuda_homes = glob.glob("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v*.*")
+                 cuda_home = "" if len(cuda_homes) == 0 else cuda_homes[0]
+

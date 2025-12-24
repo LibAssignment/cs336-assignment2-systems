@@ -1,0 +1,23 @@
+diff --git a/nvidia/cu13/include/crt/math_functions.h b/nvidia/cu13/include/crt/math_functions.h
+index 50a6646..ec27855 100644
+--- a/nvidia/cu13/include/crt/math_functions.h
++++ b/nvidia/cu13/include/crt/math_functions.h
+@@ -626,7 +626,7 @@ extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double         __cdecl sqrt(
+  *
+  * \note_accuracy_double
+  */
+-extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 rsqrt(double x);
++extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 rsqrt(double x) __THROW;
+ 
+ /**
+  * \ingroup CUDA_MATH_SINGLE
+@@ -650,7 +650,7 @@ extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 rsqrt
+  *
+  * \note_accuracy_single
+  */
+-extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrtf(float x);
++extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrtf(float x) __THROW;
+ 
+ #if defined(__QNX__) && !defined(_LIBCPP_VERSION)
+ namespace std {
+
