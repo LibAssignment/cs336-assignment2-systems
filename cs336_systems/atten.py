@@ -105,10 +105,12 @@ class FlashAttnTriton(Function):
       is_causal=is_causal,
     )
     ctx.save_for_backward(L, Q, K, V, O)
+    setattr(ctx, 'is_causal', is_causal)
     return O
 
   @staticmethod
   def backward(ctx: FunctionCtx, *grad_outputs: Tensor):
+    is_causal = getattr(ctx, 'is_causal', False)
     return FlashAttnVanilla.backward(ctx, *grad_outputs)
 
 

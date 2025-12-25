@@ -16,6 +16,7 @@ def attention_kernel(
   D: tl.constexpr,
   Q_TILE_SIZE: tl.constexpr,
   K_TILE_SIZE: tl.constexpr,
+  is_causal: tl.constexpr,
 ):
   q_seq_idx = tl.program_id(0)
   batch_idx = tl.program_id(1)
@@ -54,7 +55,11 @@ def attention_kernel(
   D_i = tl.full((Q_TILE_SIZE,), float('-inf'), tl.float32) # saves x_max
   L_i = tl.zeros((Q_TILE_SIZE,), tl.float32) # saves (x - x_max).exp().sum()
 
-  for k_seq_idx in range(tl.cdiv(Nk, K_TILE_SIZE)):
+  k_seq_max = tl.cdiv(Nk, K_TILE_SIZE)
+  if is_causal:
+    k_seq_max = tl.cdiv((q_seq_idx + 1) * Q_TILE_SIZE, K_TILE_SIZE)
+
+  for k_seq_idx in range(k_seq_max):
     k_ptr = tl.make_block_ptr(
       K_ptr + batch_idx * k_stride[0],
       strides=k_stride[-2:],
@@ -79,6 +84,12 @@ def attention_kernel(
     # Compute QK^T
     # Q_TILE_SIZE x K_TILE_SIZE
     S = tl.dot(Q_i, tl.trans(K_ij), out_dtype=tl.float32) * scale
+
+    if is_causal:
+      q_indices = tl.arange(0, Q_TILE_SIZE) + q_seq_idx * Q_TILE_SIZE
+      k_indices = tl.arange(0, K_TILE_SIZE) + k_seq_idx * K_TILE_SIZE
+      mask = q_indices[:, None] >= k_indices[None, :]
+      S = tl.where(mask, S, float('-inf'))
 
     # softmax of s
     x_max = tl.maximum(D_i, tl.max(S, axis=-1)) # Q_TILE_SIZE
@@ -133,6 +144,7 @@ def _flash_attention_triton_forward(Q: torch.Tensor, K: torch.Tensor, V: torch.T
     D=d_k, # type: ignore
     Q_TILE_SIZE=Q_TILE_SIZE, # type: ignore
     K_TILE_SIZE=K_TILE_SIZE, # type: ignore
+    is_causal=is_causal, # type: ignore
   )
 
   return O, L
