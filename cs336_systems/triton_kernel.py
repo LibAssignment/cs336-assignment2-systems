@@ -6,11 +6,11 @@ import torch
 def attention_kernel(
   Q_ptr, K_ptr, V_ptr,
   O_ptr, L_ptr,
-  s_q3, s_q2, s_q1,
-  s_k3, s_k2, s_k1,
-  s_v3, s_v2, s_v1,
-  s_o3, s_o2, s_o1,
-  s_l2, s_l1,
+  s_q0, s_qs, s_qd,
+  s_k0, s_ks, s_kd,
+  s_v0, s_vs, s_vd,
+  s_o0, s_os, s_od,
+  s_ls, s_ld,
   Nq, Nk,
   scale, # scale is 1/sqrt(d_k)
   D: tl.constexpr,
@@ -20,11 +20,11 @@ def attention_kernel(
   q_seq_idx = tl.program_id(0)
   batch_idx = tl.program_id(1)
 
-  q_stride = (s_q3, s_q2, s_q1)
-  k_stride = (s_k3, s_k2, s_k1)
-  v_stride = (s_v3, s_v2, s_v1)
-  o_stride = (s_o3, s_o2, s_o1)
-  l_stride = (s_l2, s_l1)
+  q_stride = (s_q0, s_qs, s_qd)
+  k_stride = (s_k0, s_ks, s_kd)
+  v_stride = (s_v0, s_vs, s_vd)
+  o_stride = (s_o0, s_os, s_od)
+  l_stride = (s_ls, s_ld)
   q_ptr = tl.make_block_ptr(
     Q_ptr + batch_idx * q_stride[0],
     strides=q_stride[-2:],
@@ -82,18 +82,20 @@ def attention_kernel(
 
     # softmax of s
     x_max = tl.maximum(D_i, tl.max(S, axis=-1)) # Q_TILE_SIZE
-    x = tl.exp(S - x_max[:, None]) # Q_TILE_SIZE x K_TILE_SIZE
-    x_sum = tl.sum(x, axis=-1) # Q_TILE_SIZE
-    exp_delta = tl.exp(x_max - D_i) # Q_TILE_SIZE
+    x_exp = tl.exp(S - x_max[:, None]) # Q_TILE_SIZE x K_TILE_SIZE
+    x_exp_sum = tl.sum(x_exp, axis=-1) # Q_TILE_SIZE
 
     # O = P V
-    o = tl.dot(x, V_ij) # Q_TILE_SIZE x D
+    o = tl.dot(x_exp, V_ij) # Q_TILE_SIZE x D
 
     # accumulate
-    L_i = L_i * exp_delta + tl.log(x_sum) # Q_TILE_SIZE
+    exp_delta = tl.exp(D_i - x_max) # Q_TILE_SIZE
+    L_i = L_i * exp_delta + x_exp_sum # Q_TILE_SIZE
     O_i = O_i * exp_delta[:, None] + o # Q_TILE_SIZE x D
     D_i = x_max # Q_TILE_SIZE
 
+  O_i = O_i / L_i[:, None]
+  L_i = tl.log(L_i) + D_i
   tl.store(o_ptr, O_i, boundary_check=(0, 1))
   tl.store(l_ptr, L_i, boundary_check=(0,))
 
@@ -121,16 +123,16 @@ def _flash_attention_triton_forward(Q: torch.Tensor, K: torch.Tensor, V: torch.T
   attention_kernel[grid](
     Q, K, V,
     O, L,
-    Q.stride(0), Q.stride(1), Q.stride(2),
-    K.stride(0), K.stride(1), K.stride(2),
-    V.stride(0), V.stride(1), V.stride(2),
-    O.stride(0), O.stride(1), O.stride(2),
-    L.stride(0), L.stride(1),
+    Q.stride(-3), Q.stride(-2), Q.stride(-1),
+    K.stride(-3), K.stride(-2), K.stride(-1),
+    V.stride(-3), V.stride(-2), V.stride(-1),
+    O.stride(-3), O.stride(-2), O.stride(-1),
+    L.stride(-2), L.stride(-1),
     Nq, Nk,
     scale,
-    D=d_k,
-    Q_TILE_SIZE=Q_TILE_SIZE,
-    K_TILE_SIZE=K_TILE_SIZE,
+    D=d_k, # type: ignore
+    Q_TILE_SIZE=Q_TILE_SIZE, # type: ignore
+    K_TILE_SIZE=K_TILE_SIZE, # type: ignore
   )
 
   return O, L
@@ -211,8 +213,8 @@ def _weighted_sum(
     weight.stride(0),
     output.stride(0),
     ROWS, D,
-    ROWS_TILE_SIZE=32,
-    D_TILE_SIZE=64,
+    ROWS_TILE_SIZE=32, # type: ignore
+    D_TILE_SIZE=64, # type: ignore
   )
 
   return output

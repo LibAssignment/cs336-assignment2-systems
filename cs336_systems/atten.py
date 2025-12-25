@@ -104,8 +104,6 @@ class FlashAttnTriton(Function):
       V,
       is_causal=is_causal,
     )
-    print("Triton FlashAttention forward pass done. {} {}".format(O.shape, L.shape))
-    print(O, L)
     ctx.save_for_backward(L, Q, K, V, O)
     return O
 
