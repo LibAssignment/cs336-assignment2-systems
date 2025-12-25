@@ -3,8 +3,8 @@ import torch.cuda.nvtx as nvtx
 from einops import einsum
 import torch
 from torch import Tensor
-from torch.nn import Module
 from torch.autograd.function import Function, FunctionCtx
+from typing import TypeAlias, cast
 
 class FlashAttnVanilla(Function):
   """
@@ -15,6 +15,8 @@ class FlashAttnVanilla(Function):
   - might save memory by recomputing
   """
 
+  SavedTensor: TypeAlias = tuple[Tensor, Tensor, Tensor, Tensor, Tensor]
+
   @staticmethod
   def forward(ctx: FunctionCtx, Q: Tensor, K: Tensor, V: Tensor, is_causal=False):
     # TODO: warning?
@@ -24,8 +26,24 @@ class FlashAttnVanilla(Function):
     return O
 
   @staticmethod
-  def backward(ctx, *grad_outputs):
-    raise NotImplementedError
+  def backward(ctx: FunctionCtx, *grad_outputs: Tensor):
+    """
+    S = Q K^T / sqrt(d_k)
+    P = softmax(S)
+    O = P V
+    """
+    L, Q, K, V, O = cast(FlashAttnVanilla.SavedTensor, ctx.saved_tensors) # type: ignore
+    dO, = grad_outputs
+    d_k = torch.tensor(K.shape[-1])
+    S = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys") / d_k.sqrt()
+    P = torch.softmax(S, dim=-1)
+    dV = einsum(dO, P, "... queries d_v, ... queries keys -> ... keys d_v")
+    dP = einsum(dO, V, "... queries d_v, ... keys d_v -> ... queries keys")
+    dP_dot_P = einsum(dP, P, "... queries keys, ... queries keys -> ... queries").unsqueeze(-1)
+    dS = P * (dP - dP_dot_P) / d_k.sqrt()
+    dQ = einsum(dS, K, "... queries keys, ... keys d_k -> ... queries d_k")
+    dK = einsum(dS, Q, "... queries keys, ... queries d_k -> ... keys d_k")
+    return dQ, dK, dV, None
 
 class FlashAttnTorch(Function):
   """
