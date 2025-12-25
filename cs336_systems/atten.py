@@ -6,6 +6,8 @@ from torch import Tensor
 from torch.autograd.function import Function, FunctionCtx
 from typing import TypeAlias, cast
 
+from .triton_kernel import _flash_attention_triton_forward
+
 class FlashAttnVanilla(Function):
   """
   Vanilla PyTorch implementation that works like FlashAttention2.
@@ -90,6 +92,25 @@ class FlashAttnTorch(Function):
 
   @staticmethod
   def backward(ctx, *grad_outputs):
+    return FlashAttnVanilla.backward(ctx, *grad_outputs)
+
+
+class FlashAttnTriton(Function):
+  @staticmethod
+  def forward(ctx: FunctionCtx, Q: Tensor, K: Tensor, V: Tensor, is_causal=False):
+    O, L = _flash_attention_triton_forward(
+      Q,
+      K,
+      V,
+      is_causal=is_causal,
+    )
+    print("Triton FlashAttention forward pass done. {} {}".format(O.shape, L.shape))
+    print(O, L)
+    ctx.save_for_backward(L, Q, K, V, O)
+    return O
+
+  @staticmethod
+  def backward(ctx: FunctionCtx, *grad_outputs: Tensor):
     return FlashAttnVanilla.backward(ctx, *grad_outputs)
 
 
