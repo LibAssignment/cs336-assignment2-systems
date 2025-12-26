@@ -34,15 +34,17 @@ class FlashAttnVanilla(Function):
     P = softmax(S)
     O = P V
     """
-    L, Q, K, V, O = cast(FlashAttnVanilla.SavedTensor, ctx.saved_tensors) # type: ignore
+    L, Q, K, V, O = cast(FlashAttnVanilla.SavedTensor, ctx.saved_tensors[:5]) # type: ignore
     dO, = grad_outputs
     d_k = torch.tensor(K.shape[-1])
     S = einsum(Q, K, "... queries d_k, ... keys d_k -> ... queries keys") / d_k.sqrt()
-    P = torch.softmax(S, dim=-1)
+    P = (S - L.unsqueeze(-1)).exp()
     dV = einsum(dO, P, "... queries d_v, ... queries keys -> ... keys d_v")
     dP = einsum(dO, V, "... queries d_v, ... keys d_v -> ... queries keys")
-    dP_dot_P = einsum(dP, P, "... queries keys, ... queries keys -> ... queries").unsqueeze(-1)
-    dS = P * (dP - dP_dot_P) / d_k.sqrt()
+    # TODO: verify dP_dot_P is D = (O * dO).sum(dim=-1)
+    # dP_dot_P = einsum(dP, P, "... queries keys, ... queries keys -> ... queries").unsqueeze(-1)
+    D = (O * dO).sum(dim=-1, keepdim=True)
+    dS = P * (dP - D) / d_k.sqrt()
     dQ = einsum(dS, K, "... queries keys, ... keys d_k -> ... queries d_k")
     dK = einsum(dS, Q, "... queries keys, ... queries d_k -> ... keys d_k")
     return dQ, dK, dV, None
@@ -88,11 +90,52 @@ class FlashAttnTorch(Function):
     assert O.shape == (*Q.shape[:-1], V.shape[-1]), "Output shape mismatch in FlashAttnTorch forward pass. from {} {}, got {}".format(Q.shape, V.shape, O.shape)
     assert L.shape == Q.shape[:-1], "Log-sum-exp shape mismatch in FlashAttnTorch forward pass. from {} got {}".format(Q.shape, L.shape)
     ctx.save_for_backward(L, Q, K, V, O)
+    ctx.is_causal = is_causal # type: ignore
     return O
 
   @staticmethod
-  def backward(ctx, *grad_outputs):
-    return FlashAttnVanilla.backward(ctx, *grad_outputs)
+  def backward(ctx, *grad_outputs: Tensor):
+    # return FlashAttnVanilla.backward(ctx, *grad_outputs)
+    BLOCK_Q = 16
+    BLOCK_K = 64
+
+    is_causal: bool = ctx.is_causal  # type: ignore
+    L, Q, K, V, O = cast(FlashAttnVanilla.SavedTensor, ctx.saved_tensors) # type: ignore
+    L = L.unsqueeze(-1)  # add last dim back
+    dO, = grad_outputs
+
+    dQ = torch.zeros_like(Q)
+    dK = torch.zeros_like(K)
+    dV = torch.zeros_like(V)
+
+    d_k = torch.tensor(K.shape[-1])
+    for i in range(Q.shape[-2] // BLOCK_Q):
+      dO_i = dO[..., i*BLOCK_Q:(i+1)*BLOCK_Q, :]
+      O_i = O[..., i*BLOCK_Q:(i+1)*BLOCK_Q, :]
+      Q_i = Q[..., i*BLOCK_Q:(i+1)*BLOCK_Q, :]
+      L_i = L[..., i*BLOCK_Q:(i+1)*BLOCK_Q, :]
+      dQ_i = torch.zeros_like(Q_i)
+
+      D_i = (O_i * dO_i).sum(dim=-1, keepdim=True)
+
+      for j in range(K.shape[-2] // BLOCK_K):
+        K_j = K[..., j*BLOCK_K:(j+1)*BLOCK_K, :]
+        V_j = V[..., j*BLOCK_K:(j+1)*BLOCK_K, :]
+
+        S_ij = einsum(Q_i, K_j, "... queries d_k, ... keys d_k -> ... queries keys") / d_k.sqrt()
+        P_ij = (S_ij - L_i).exp()
+
+        dV_j = einsum(dO_i, P_ij, "... queries d_v, ... queries keys -> ... keys d_v")
+        dP_ij = einsum(dO_i, V_j, "... queries d_v, ... keys d_v -> ... queries keys")
+        dS_ij = P_ij * (dP_ij - D_i) / d_k.sqrt()
+        dQ_ij = einsum(dS_ij, K_j, "... queries keys, ... keys d_k -> ... queries d_k")
+        dK_j = einsum(dS_ij, Q_i, "... queries keys, ... queries d_k -> ... keys d_k")
+
+        dQ_i += dQ_ij
+        dK[..., j*BLOCK_K:(j+1)*BLOCK_K, :] += dK_j
+        dV[..., j*BLOCK_K:(j+1)*BLOCK_K, :] += dV_j
+      dQ[..., i*BLOCK_Q:(i+1)*BLOCK_Q, :] = dQ_i
+    return dQ, dK, dV, None
 
 
 class FlashAttnTriton(Function):
