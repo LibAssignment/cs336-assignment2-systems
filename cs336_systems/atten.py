@@ -6,7 +6,7 @@ from torch import Tensor
 from torch.autograd.function import Function, FunctionCtx
 from typing import TypeAlias, cast
 
-from .triton_kernel import _flash_attention_triton_forward
+from .triton_kernel import _flash_attention_triton_backward, _flash_attention_triton_forward
 
 class FlashAttnVanilla(Function):
   """
@@ -154,7 +154,10 @@ class FlashAttnTriton(Function):
   @staticmethod
   def backward(ctx: FunctionCtx, *grad_outputs: Tensor):
     is_causal = getattr(ctx, 'is_causal', False)
-    return FlashAttnVanilla.backward(ctx, *grad_outputs)
+    L, Q, K, V, O = cast(FlashAttnVanilla.SavedTensor, ctx.saved_tensors[:5]) # type: ignore
+    dO, = grad_outputs
+    dQ, dK, dV = _flash_attention_triton_backward(L, Q, K, V, O, dO, is_causal=is_causal)
+    return dQ, dK, dV, None
 
 
 def _vanilla_flash_attention_forward(Q: Tensor, K: Tensor, V: Tensor, *, D: Tensor | None = None, is_causal=False):
