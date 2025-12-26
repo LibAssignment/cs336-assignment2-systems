@@ -306,8 +306,8 @@ def attention_kernel_backward(
     dQ_i += dQ_ij
     k_offsets = batch_idx * dk_stride[0] + (k_seq_idx * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)[:, None]) * dk_stride[1] + tl.arange(0, D)[None, :] * dk_stride[2]
     v_offsets = batch_idx * dv_stride[0] + (k_seq_idx * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)[:, None]) * dv_stride[1] + tl.arange(0, D)[None, :] * dv_stride[2]
-    tl.atomic_add(K_ptr + k_offsets, dK_ij, ) # TODO: boundary_check here?
-    tl.atomic_add(V_ptr + v_offsets, dV_ij, )
+    tl.atomic_add(dK_ptr + k_offsets, dK_ij, ) # TODO: boundary_check here?
+    tl.atomic_add(dV_ptr + v_offsets, dV_ij, )
   tl.store(dq_ptr, dQ_i, boundary_check=(0, 1))
 
 
