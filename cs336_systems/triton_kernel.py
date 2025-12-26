@@ -294,7 +294,7 @@ def attention_kernel_backward(
       S = tl.where(mask, S, float('-inf'))
 
     # softmax of s
-    P = tl.exp(S - L_i) * scale # Q_TILE_SIZE x K_TILE_SIZE
+    P = tl.exp(S - L_i) # Q_TILE_SIZE x K_TILE_SIZE
 
     dV_ij = tl.dot(tl.trans(P), dO_i) # K_TILE_SIZE x D
     dP = tl.dot(dO_i, tl.trans(V_ij)) # Q_TILE_SIZE x K_TILE_SIZE
@@ -304,8 +304,10 @@ def attention_kernel_backward(
     # accumulate
 
     dQ_i += dQ_ij
-    tl.atomic_add(dk_ptr, dK_ij, ) # TODO: boundary_check here?
-    tl.atomic_add(dv_ptr, dV_ij, )
+    k_offsets = batch_idx * dk_stride[0] + (k_seq_idx * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)[:, None]) * dk_stride[1] + tl.arange(0, D)[None, :] * dk_stride[2]
+    v_offsets = batch_idx * dv_stride[0] + (k_seq_idx * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)[:, None]) * dv_stride[1] + tl.arange(0, D)[None, :] * dv_stride[2]
+    tl.atomic_add(K_ptr + k_offsets, dK_ij, ) # TODO: boundary_check here?
+    tl.atomic_add(V_ptr + v_offsets, dV_ij, )
   tl.store(dq_ptr, dQ_i, boundary_check=(0, 1))
 
 
