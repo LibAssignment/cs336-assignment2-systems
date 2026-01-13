@@ -14,11 +14,12 @@ class Functions:
     tilelang: Type | None = None
 
 def get_softmax_functions() -> Functions:
-    from cs336_systems.kernels._torch import SoftmaxTorch
+    from cs336_systems.kernels._torch import SoftmaxTorch, SoftmaxTorchTile
 
     return Functions(
         # reference=torch.nn.Softmax,
         torch=SoftmaxTorch,
+        torch_tile=SoftmaxTorchTile,
     )
 
 
