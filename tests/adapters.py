@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 from typing import Type
+from dataclasses import dataclass
 
 import torch
 
+@dataclass
+class Functions:
+    # reference: Type
+    torch: Type | None = None
+    torch_tile: Type | None = None
+    triton: Type | None = None
+    tilelang: Type | None = None
+
+def get_softmax_functions() -> Functions:
+    from cs336_systems.kernels._torch import SoftmaxTorch
+
+    return Functions(
+        # reference=torch.nn.Softmax,
+        torch=SoftmaxTorch,
+    )
 
 
 def get_flashattention_autograd_function_pytorch() -> Type:
