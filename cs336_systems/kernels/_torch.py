@@ -37,6 +37,18 @@ class SoftmaxTorchTile(Function):
       Y_i = (X_i - lse).exp()
       Y[..., i*BLOCK:(i+1)*BLOCK] = Y_i
 
+    # print(lse)
     ctx.save_for_backward(lse, Y)
     setattr(ctx, "dim", -1)
     return Y
+
+class SoftmaxTriton(Function):
+  @staticmethod
+  def forward(ctx: FunctionCtx, input: Tensor):
+    from ._triton import softmax_triton
+
+    output, lse = softmax_triton(input)
+    # print(lse)
+    ctx.save_for_backward(lse, output)
+    setattr(ctx, "dim", -1)
+    return output

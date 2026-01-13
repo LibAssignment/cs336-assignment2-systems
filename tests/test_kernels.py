@@ -6,6 +6,7 @@ from .adapters import get_softmax_functions
 
 @pytest.mark.parametrize("input_shape", [
     (10,),
+    (16,),
     (1024,),
     (5, 1024),
     (2, 3, 1024),
@@ -16,6 +17,8 @@ def test_get_softmax_functions(input_shape: tuple[int, ...]):
 
   input_tensor = torch.randn(*input_shape)
   reference_output = torch.softmax(input_tensor, dim=-1)
+  lse = torch.logsumexp(input_tensor, dim=-1, keepdim=True)
+  print("Reference LSE:", lse)
 
   if functions.torch is not None:
     torch_output = functions.torch().apply(input_tensor)
@@ -26,8 +29,8 @@ def test_get_softmax_functions(input_shape: tuple[int, ...]):
     torch.testing.assert_close(torch_tile_output, reference_output, rtol=1e-5, atol=1e-5)
 
   if functions.triton is not None:
-    triton_output = functions.triton().apply(input_tensor)
-    torch.testing.assert_close(triton_output, reference_output, rtol=1e-5, atol=1e-5)
+    triton_output = functions.triton().apply(input_tensor.cuda())
+    torch.testing.assert_close(triton_output.cpu(), reference_output, rtol=1e-5, atol=1e-5)
 
   if functions.tilelang is not None:
     tilelang_output = functions.tilelang().apply(input_tensor)
