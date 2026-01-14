@@ -24,6 +24,7 @@ def softmax_kernel(
     block_shape=(N_TILE,),
     order=(0,),
   )
+  x_offsets = tl.arange(0, N_TILE)
 
   y_ptr = tl.make_block_ptr(
     Y_ptr + batch_idx * s_y0,
@@ -45,7 +46,9 @@ def softmax_kernel(
 
   lse = tl.full((1,), float("-inf"), dtype=tl.float32)
   for i in range(tl.cdiv(N, N_TILE)):
+    x_mask = x_offsets + i * N_TILE < N
     x = tl.load(x_ptr, boundary_check=(0,), padding_option="nan") # TODO: should fill -inf
+    x = tl.where(x_mask, x, float("-inf"))
     x_max = tl.max(x, axis=-1, keep_dims=True)
     exps = tl.exp(x - x_max)
     sum_exps = tl.sum(exps, axis=-1, keep_dims=True)
